@@ -1,0 +1,7 @@
+ccxt
+requests
+pandas
+numpy
+scikit-learn
+tensorflow
+kafka-python
