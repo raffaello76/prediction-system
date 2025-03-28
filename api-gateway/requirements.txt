@@ -1,7 +1,5 @@
 ccxt
 requests
-pandas
-numpy
-scikit-learn
-tensorflow
+Flask
 kafka-python
+

@@ -22,7 +22,7 @@ class PredictorService:
         # Caricamento modello
         self.model = tf.keras.models.load_model('/models/bitcoin_prediction_model')
 
-    def predict_next_hours(self, last_sequence, hours=6):
+    def predict_next_hours(self, last_sequence, hours=2):
         """
         Predizione prezzi per le prossime ore
         """
