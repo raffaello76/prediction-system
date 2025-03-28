@@ -8,7 +8,6 @@ import time
 import logging
 from kafka import KafkaProducer
 
-# Configurazione del logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
 class DataFetcherService:
@@ -20,34 +19,51 @@ class DataFetcherService:
 
     def fetch_from_exchanges(self, exchanges: List[str] = ['binance', 'coinbase', 'kucoin']) -> Dict:
         """
-        Recupera dati da multipli exchange, gestendo Binance con le proprie API key.
+        Recupera dati da multipli exchange.
+        Gestisce Binance: se sono fornite le API key, le usa e le logga in chiaro,
+        altrimenti usa l’endpoint pubblico.
+        Per Coinbase, usa Coinbase Pro.
+        Per Kucoin, converte i Timestamp in stringhe ISO.
         """
         all_data = {}
         for exchange_name in exchanges:
             try:
                 if exchange_name.lower() == 'binance':
-                    api_key = os.environ.get('BINANCE_API_KEY')
-                    api_secret = os.environ.get('BINANCE_API_SECRET')
-                    if not api_key or not api_secret:
-                        raise ValueError("Le credenziali per Binance non sono state impostate.")
-                    exchange = ccxt.binance({
-                        'apiKey': api_key,
-                        'secret': api_secret,
-                        'enableRateLimit': True,
-                    })
+                    api_key = os.environ.get('BINANCE_API_KEY', '').strip()
+                    api_secret = os.environ.get('BINANCE_API_SECRET', '').strip()
+                    if api_key and api_secret:
+                        logging.info(f"Utilizzo API Key Binance: {api_key[:4]}***")
+                        exchange = ccxt.binance({
+                            'apiKey': api_key,
+                            'secret': api_secret,
+                            'enableRateLimit': True,
+                            'options': {'adjustForTimeDifference': True}
+                        })
+                    else:
+                        logging.info("Nessuna API Key fornita per Binance, uso endpoint pubblico")
+                        exchange = ccxt.binance({'enableRateLimit': True})
+                    timeframe = '4h'
+                elif exchange_name.lower() == 'coinbase':
+                    logging.info("Utilizzo Coinbase Pro per recuperare dati")
+                    exchange = ccxt.coinbasepro({'enableRateLimit': True})
+                    timeframe = '4h'
+                elif exchange_name.lower() == 'kucoin':
+                    exchange = ccxt.kucoin({'enableRateLimit': True})
+                    timeframe = '4h'
                 else:
                     exchange_class = getattr(ccxt, exchange_name)
-                    exchange = exchange_class()
+                    exchange = exchange_class({'enableRateLimit': True})
+                    timeframe = '4h'
 
-                ohlcv = exchange.fetch_ohlcv('BTC/USDT', '4h')
+                ohlcv = exchange.fetch_ohlcv('BTC/USDT', timeframe)
                 df = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
                 df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
+                # Converte i timestamp in stringhe ISO per evitare problemi di serializzazione JSON
+                df['timestamp'] = df['timestamp'].apply(lambda x: x.isoformat() if hasattr(x, "isoformat") else str(x))
                 data_records = df.to_dict(orient='records')
                 all_data[exchange_name] = data_records
 
-                # Log di conferma
                 logging.info(f"Dati scaricati da {exchange_name}: {len(data_records)} record ottenuti.")
-                
                 self.kafka_producer.send('bitcoin_data', {
                     'exchange': exchange_name,
                     'data': data_records
@@ -88,7 +104,7 @@ class DataFetcherService:
             self.fetch_from_exchanges()
             self.fetch_additional_data()
             logging.info("Recupero completato. Attesa 30 minuti per il prossimo ciclo.")
-            time.sleep(1800)  # 30 minuti
+            time.sleep(1800)
 
 if __name__ == "__main__":
     service = DataFetcherService()

@@ -22,5 +22,5 @@ COPY . .
 RUN chmod +x wait-for-kafka.sh
 
 # Avvia lo script di attesa (che poi dovrebbe lanciare l'app)
-CMD ["./wait-for-kafka.sh"]
-
+#CMD ["./wait-for-kafka.sh"]
+CMD ["./wait-for-kafka.sh", "data_fetcher.py"]
