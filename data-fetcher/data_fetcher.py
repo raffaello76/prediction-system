@@ -5,11 +5,14 @@ import pandas as pd
 from typing import List, Dict
 import json
 import time
+import logging
 from kafka import KafkaProducer
+
+# Configurazione del logging
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
 class DataFetcherService:
     def __init__(self):
-        # Configurazione Kafka per messaggistica
         self.kafka_producer = KafkaProducer(
             bootstrap_servers=['kafka:9092'],
             value_serializer=lambda v: json.dumps(v).encode('utf-8')
@@ -23,7 +26,6 @@ class DataFetcherService:
         for exchange_name in exchanges:
             try:
                 if exchange_name.lower() == 'binance':
-                    # Recupera le API key dall'ambiente
                     api_key = os.environ.get('BINANCE_API_KEY')
                     api_secret = os.environ.get('BINANCE_API_SECRET')
                     if not api_key or not api_secret:
@@ -37,20 +39,21 @@ class DataFetcherService:
                     exchange_class = getattr(ccxt, exchange_name)
                     exchange = exchange_class()
 
-                # Recupero dati OHLCV per BTC/USDT con timeframe 4h
                 ohlcv = exchange.fetch_ohlcv('BTC/USDT', '4h')
                 df = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
                 df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
                 data_records = df.to_dict(orient='records')
                 all_data[exchange_name] = data_records
 
-                # Pubblica i dati su Kafka
+                # Log di conferma
+                logging.info(f"Dati scaricati da {exchange_name}: {len(data_records)} record ottenuti.")
+                
                 self.kafka_producer.send('bitcoin_data', {
                     'exchange': exchange_name,
                     'data': data_records
                 })
             except Exception as e:
-                print(f"Errore nel recupero dati da {exchange_name}: {e}")
+                logging.error(f"Errore nel recupero dati da {exchange_name}: {e}")
         return all_data
 
     def fetch_additional_data(self) -> Dict:
@@ -67,13 +70,13 @@ class DataFetcherService:
                 response = requests.get(url)
                 data = response.json()
                 additional_data[source] = data
-                # Pubblica i dati su Kafka
+                logging.info(f"Dati scaricati da {source}.")
                 self.kafka_producer.send('bitcoin_additional_data', {
                     'source': source,
                     'data': data
                 })
             except Exception as e:
-                print(f"Errore nel recupero dati da {source}: {e}")
+                logging.error(f"Errore nel recupero dati da {source}: {e}")
         return additional_data
 
     def run(self):
@@ -81,9 +84,11 @@ class DataFetcherService:
         Esecuzione continua del servizio di fetch: recupera i dati ogni 30 minuti.
         """
         while True:
+            logging.info("Inizio recupero dati da exchange e API esterne.")
             self.fetch_from_exchanges()
             self.fetch_additional_data()
-            time.sleep(1800)  # Attesa 30 minuti
+            logging.info("Recupero completato. Attesa 30 minuti per il prossimo ciclo.")
+            time.sleep(1800)  # 30 minuti
 
 if __name__ == "__main__":
     service = DataFetcherService()
