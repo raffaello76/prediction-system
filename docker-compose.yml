@@ -27,6 +27,12 @@ services:
       KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
       KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092
       KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      # Aumenta il limite di dimensione massima dei messaggi (5MB)
+      KAFKA_MESSAGE_MAX_BYTES: 5242880
+      # Aumenta la dimensione massima della richiesta che un consumer può fare
+      KAFKA_REPLICA_FETCH_MAX_BYTES: 5242880
+      # Buffer di memoria per le richieste
+      KAFKA_REPLICA_SOCKET_RECEIVE_BUFFER_BYTES: 5242880
     networks:
       - kafka-net
     restart: unless-stopped

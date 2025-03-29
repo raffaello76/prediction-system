@@ -1,112 +1,115 @@
 import os
-import ccxt
-import requests
-import pandas as pd
-from typing import List, Dict
-import json
-import time
 import logging
+import time
+import json
+import pandas as pd
+from binance.client import Client
+from binance.exceptions import BinanceAPIException, BinanceOrderException
 from kafka import KafkaProducer
+from typing import List, Dict
 
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+# Configure logging
+logging.basicConfig(level=logging.INFO, 
+                    format='%(asctime)s - %(levelname)s - %(message)s')
 
-class DataFetcherService:
+class BinanceDataFetcherService:
     def __init__(self):
+        # Initialize Binance client
+        api_key = os.environ.get('BINANCE_API_KEY', '').strip()
+        api_secret = os.environ.get('BINANCE_API_SECRET', '').strip()
+        
+        try:
+            if api_key and api_secret:
+                logging.info(f"Initializing Binance client with API Key: {api_key[:4]}***")
+                self.client = Client(api_key, api_secret)
+            else:
+                logging.info("No API Key provided, initializing public Binance client")
+                self.client = Client()
+        except Exception as e:
+            logging.error(f"Error initializing Binance client: {e}")
+            raise
+
+        # Initialize Kafka Producer
         self.kafka_producer = KafkaProducer(
             bootstrap_servers=['kafka:9092'],
             value_serializer=lambda v: json.dumps(v).encode('utf-8')
         )
 
-    def fetch_from_exchanges(self, exchanges: List[str] = ['binance', 'coinbase', 'kucoin']) -> Dict:
+    def fetch_btcusdt_data(self, interval: str = '4h') -> List[Dict]:
         """
-        Recupera dati da multipli exchange.
-        Gestisce Binance: se sono fornite le API key, le usa e le logga in chiaro,
-        altrimenti usa l’endpoint pubblico.
-        Per Coinbase, usa Coinbase Pro.
-        Per Kucoin, converte i Timestamp in stringhe ISO.
+        Fetch BTCUSDT kline (candlestick) data from Binance
+        
+        :param interval: Kline interval (default is 4 hours)
+        :return: List of dictionaries containing OHLCV data
         """
-        all_data = {}
-        for exchange_name in exchanges:
-            try:
-                if exchange_name.lower() == 'binance':
-                    api_key = os.environ.get('BINANCE_API_KEY', '').strip()
-                    api_secret = os.environ.get('BINANCE_API_SECRET', '').strip()
-                    if api_key and api_secret:
-                        logging.info(f"Utilizzo API Key Binance: {api_key[:4]}***")
-                        exchange = ccxt.binance({
-                            'apiKey': api_key,
-                            'secret': api_secret,
-                            'enableRateLimit': True,
-                            'options': {'adjustForTimeDifference': True}
-                        })
-                    else:
-                        logging.info("Nessuna API Key fornita per Binance, uso endpoint pubblico")
-                        exchange = ccxt.binance({'enableRateLimit': True})
-                    timeframe = '4h'
-                elif exchange_name.lower() == 'coinbase':
-                    logging.info("Utilizzo Coinbase Pro per recuperare dati")
-                    exchange = ccxt.coinbasepro({'enableRateLimit': True})
-                    timeframe = '4h'
-                elif exchange_name.lower() == 'kucoin':
-                    exchange = ccxt.kucoin({'enableRateLimit': True})
-                    timeframe = '4h'
-                else:
-                    exchange_class = getattr(ccxt, exchange_name)
-                    exchange = exchange_class({'enableRateLimit': True})
-                    timeframe = '4h'
+        try:
+            # Fetch last 500 candles 
+            klines = self.client.get_klines(symbol='BTCUSDT', interval=interval, limit=500)
+            
+            # Convert to DataFrame for easier processing
+            df = pd.DataFrame(klines, columns=[
+                'open_time', 'open', 'high', 'low', 'close', 'volume', 
+                'close_time', 'quote_asset_volume', 'number_of_trades', 
+                'taker_buy_base_asset_volume', 'taker_buy_quote_asset_volume', 'ignore'
+            ])
+            
+            # Select and convert necessary columns
+            df = df[['open_time', 'open', 'high', 'low', 'close', 'volume']]
+            
+            # Convert columns to appropriate types
+            df['open_time'] = pd.to_datetime(df['open_time'], unit='ms')
+            df = df.astype({
+                'open': float, 
+                'high': float, 
+                'low': float, 
+                'close': float, 
+                'volume': float
+            })
+            
+            # Convert timestamps to ISO format strings for JSON serialization
+            df['open_time'] = df['open_time'].apply(lambda x: x.isoformat())
+            
+            # Convert to list of dictionaries
+            data_records = df.to_dict(orient='records')
+            
+            # Log and send to Kafka
+            logging.info(f"Fetched {len(data_records)} BTCUSDT klines")
+            self.kafka_producer.send('bitcoin_data', {
+                'exchange': 'binance',
+                'symbol': 'BTCUSDT',
+                'interval': interval,
+                'data': data_records
+            })
+            
+            return data_records
+        
+        except BinanceAPIException as e:
+            logging.error(f"Binance API Exception: {e}")
+            return []
+        except Exception as e:
+            logging.error(f"Error fetching BTCUSDT data: {e}")
+            return []
 
-                ohlcv = exchange.fetch_ohlcv('BTC/USDT', timeframe)
-                df = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
-                df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
-                # Converte i timestamp in stringhe ISO per evitare problemi di serializzazione JSON
-                df['timestamp'] = df['timestamp'].apply(lambda x: x.isoformat() if hasattr(x, "isoformat") else str(x))
-                data_records = df.to_dict(orient='records')
-                all_data[exchange_name] = data_records
-
-                logging.info(f"Dati scaricati da {exchange_name}: {len(data_records)} record ottenuti.")
-                self.kafka_producer.send('bitcoin_data', {
-                    'exchange': exchange_name,
-                    'data': data_records
-                })
-            except Exception as e:
-                logging.error(f"Errore nel recupero dati da {exchange_name}: {e}")
-        return all_data
-
-    def fetch_additional_data(self) -> Dict:
+    def run(self, interval: int = 1800):
         """
-        Recupera dati aggiuntivi da API esterne e li pubblica su Kafka.
-        """
-        additional_sources = {
-            'coingecko': 'https://api.coingecko.com/api/v3/coins/bitcoin/market_chart?vs_currency=usd&days=30',
-            'cryptocompare': 'https://min-api.cryptocompare.com/data/pricemultifull?fsyms=BTC&tsyms=USD'
-        }
-        additional_data = {}
-        for source, url in additional_sources.items():
-            try:
-                response = requests.get(url)
-                data = response.json()
-                additional_data[source] = data
-                logging.info(f"Dati scaricati da {source}.")
-                self.kafka_producer.send('bitcoin_additional_data', {
-                    'source': source,
-                    'data': data
-                })
-            except Exception as e:
-                logging.error(f"Errore nel recupero dati da {source}: {e}")
-        return additional_data
-
-    def run(self):
-        """
-        Esecuzione continua del servizio di fetch: recupera i dati ogni 30 minuti.
+        Continuously run the data fetcher
+        
+        :param interval: Sleep time between fetch cycles (default 30 minutes)
         """
         while True:
-            logging.info("Inizio recupero dati da exchange e API esterne.")
-            self.fetch_from_exchanges()
-            self.fetch_additional_data()
-            logging.info("Recupero completato. Attesa 30 minuti per il prossimo ciclo.")
-            time.sleep(1800)
+            try:
+                logging.info("Starting BTCUSDT data fetch cycle")
+                self.fetch_btcusdt_data()
+                logging.info(f"Waiting {interval} seconds before next fetch")
+                time.sleep(interval)
+            except Exception as e:
+                logging.error(f"Error in run cycle: {e}")
+                # Wait a bit before retrying to prevent rapid error loops
+                time.sleep(60)
 
-if __name__ == "__main__":
-    service = DataFetcherService()
+def main():
+    service = BinanceDataFetcherService()
     service.run()
 
+if __name__ == "__main__":
+    main()
