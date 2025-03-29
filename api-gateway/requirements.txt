@@ -2,4 +2,5 @@ ccxt
 requests
 Flask
 kafka-python
+flask-cors
 

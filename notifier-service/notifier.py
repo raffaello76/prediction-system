@@ -18,7 +18,8 @@ class TelegramNotifier:
             'bitcoin_predictions',
             bootstrap_servers=['kafka:9092'],
             value_deserializer=lambda x: json.loads(x.decode('utf-8')),
-            auto_offset_reset='latest'
+            auto_offset_reset='latest',
+            group_id='telegram-notifier-group'
         )
 
     def send_telegram_message(self, message):

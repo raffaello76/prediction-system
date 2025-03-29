@@ -88,6 +88,10 @@ services:
     networks:
       - kafka-net
     restart: unless-stopped
+    environment:
+      TELEGRAM_TOKEN: ${TELEGRAM_TOKEN}
+      TELEGRAM_CHAT_IDS: ${TELEGRAM_CHAT_IDS}
+
 
   analysis-service:
     build: ./analysis-service

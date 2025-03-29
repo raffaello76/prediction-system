@@ -77,3 +77,84 @@ Ogni servizio ha un ruolo ben definito nella pipeline:
 - Connessione Internet per il fetch dei dati
 
 
+┌─────────────────────────────┐
+│ BinanceDataFetcherService   │
+│ - Recupera i dati BTCUSDT   │
+│   da Binance (candlestick)  │
+│ - Invia i dati al topic:    │
+│   "bitcoin_data"            │
+└──────────────┬──────────────┘
+               │
+               ▼
+┌─────────────────────────────┐
+│   DataPreprocessor Service  │
+│ - Consuma i dati dal topic  │
+│   "bitcoin_data"            │
+│ - Esegue preprocessing:     │
+│   • Calcolo indicatori      │
+│     tecnici (MA, volatilità, │
+│       returns, ecc.)        │
+│   • Creazione di sequenze   │
+│     per LSTM                │
+│ - Pubblica i dati processati│
+│   su "preprocessed_bitcoin_data"  │
+└──────────────┬──────────────┘
+               │
+               ▼
+┌─────────────────────────────┐
+│  ModelTrainerService        │
+│ - Consuma le sequenze da    │
+│   "preprocessed_bitcoin_data"    │
+│ - Addestra il modello LSTM   │
+│ - Salva il modello e invia  │
+│   i risultati dell'addestramento   │
+│   su "model_training_results"      │
+└──────────────┬──────────────┘
+               │
+               ▼
+       (Passo facoltativo)
+   [Modulo di Predictive Model]
+   - Utilizza il modello addestrato per
+     generare previsioni sui prezzi
+   - Invia le previsioni al topic:
+     "bitcoin_predictions"
+               │
+               ▼
+┌─────────────────────────────┐
+│   AnalysisService           │
+│ - Consuma previsioni dal    │
+│   topic "bitcoin_predictions"    │
+│ - Recupera l'ultimo prezzo  │
+│   dal topic "bitcoin_data"   │
+│ - Calcola segnali di trading│
+│   e raccomandazioni tramite  │
+│   la strategia (BitcoinTradingStrategy) │
+│   (in questo esempio stampa i    │
+│    risultati, ma in un sistema    │
+│    operativo verrebbe inviarli a  │
+│    un topic dedicato, es.         │
+│    "bitcoin_trading_signals")      │
+└──────────────┬──────────────┘
+               │
+               ▼
+┌─────────────────────────────┐
+│   API Gateway Service       │
+│ - Consuma segnali (da "bitcoin_trading_signals") │
+│ - Tiene uno storico di segnali e prezzi          │
+│ - Espone endpoint REST per:                      │
+│    • Stato del sistema                           │
+│    • Ultimi segnali                              │
+│    • Cronologia dei segnali e dei prezzi         │
+│    • Dati per la dashboard                       │
+└──────────────┬──────────────┘
+               │
+               ▼
+┌─────────────────────────────┐
+│   TelegramNotifier Service  │
+│ - Consuma segnali da:                           │
+│      • "bitcoin_predictions" oppure           │
+│      • "bitcoin_trading_signals"                │
+│   (a seconda della versione implementata)      │
+│ - Formattta il messaggio e invia notifiche via  │
+│   Telegram ai canali configurati               │
+└─────────────────────────────┘
