@@ -44,30 +44,37 @@ class PredictorService:
 
     def predict_next_hours(self, last_sequence, hours=2):
         """
-        Predizione prezzi per le prossime ore
+        Predizione prezzi per le prossime ore.
+        Aggiorna la sequenza sostituendo la feature "close" dell'ultimo timestep con il valore predetto.
         """
         logging.info("Inizio della predizione per le prossime ore")
         predictions = []
-        current_sequence = last_sequence
-        
+        current_sequence = last_sequence  # forma attesa: (1, 10, 12)
+    
         for hour in range(hours):
             logging.info(f"Predizione per ora {hour+1}")
             try:
-                # Predizione del prossimo prezzo
+                # Predizione del prossimo prezzo (output scalare)
                 next_pred = self.model.predict(current_sequence)[0]
-                logging.info(f"Predizione per ora {hour+1}: {next_pred}")
-                predictions.append(float(next_pred))
-                
-                # Aggiornamento della sequenza:
-                # Si scarta il primo timestep e si aggiunge la nuova predizione
-                current_sequence = np.append(current_sequence[:, 1:, :], 
-                                             next_pred.reshape(1, 1, 1), 
-                                             axis=1)
+                predicted_value = float(next_pred)
+                logging.info(f"Predizione per ora {hour+1}: {predicted_value}")
+                predictions.append(predicted_value)
+            
+                # Estrai l'ultimo timestep corrente
+                last_timestep = current_sequence[0, -1, :].copy()  # forma (12,)
+                # Sostituisci la feature target ("close" a indice 3) con il valore predetto
+                last_timestep[3] = predicted_value
+            
+                # Costruisci il nuovo timestep come (1,1,12)
+                new_timestep = last_timestep.reshape(1, 1, -1)
+            
+                # Rimuovi il primo timestep e concatenalo alla fine
+                current_sequence = np.concatenate([current_sequence[:, 1:, :], new_timestep], axis=1)
                 logging.info(f"Aggiornamento della sequenza completato per ora {hour+1}")
             except Exception as e:
                 logging.error(f"Errore durante la predizione per ora {hour+1}: {e}")
                 break
-        
+    
         # Pubblica le predizioni su Kafka
         try:
             self.kafka_producer.send('bitcoin_predictions', {
@@ -76,8 +83,9 @@ class PredictorService:
             logging.info(f"Predizioni pubblicate su 'bitcoin_predictions': {predictions}")
         except Exception as e:
             logging.error(f"Errore durante l'invio delle predizioni a Kafka: {e}")
-        
+
         return predictions
+
 
     def run(self):
         """
